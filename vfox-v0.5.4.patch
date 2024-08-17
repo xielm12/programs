@@ -1,0 +1,143 @@
+diff --git a/cmd/cmd.go b/cmd/cmd.go
+index 1693e1b..6562666 100644
+--- a/cmd/cmd.go
++++ b/cmd/cmd.go
+@@ -72,6 +72,7 @@ func newCmd() *cmd {
+ 	debugFlags := &cli.BoolFlag{
+ 		Name:  "debug",
+ 		Usage: "show debug information",
++		Value: true,
+ 		Action: func(ctx *cli.Context, b bool) error {
+ 			logger.SetLevel(logger.DebugLevel)
+ 			return nil
+diff --git a/cmd/commands/activate.go b/cmd/commands/activate.go
+index 7d05e1b..48c301b 100644
+--- a/cmd/commands/activate.go
++++ b/cmd/commands/activate.go
+@@ -19,6 +19,7 @@ package commands
+ import (
+ 	"fmt"
+ 	"os"
++	"path/filepath"
+ 	"strings"
+ 	"text/template"
+ 
+@@ -58,7 +59,7 @@ func activateCmd(ctx *cli.Context) error {
+ 	}); err != nil {
+ 		return err
+ 	}
+-	homeToolVersion, err := toolset.NewToolVersion(manager.PathMeta.HomePath)
++	homeToolVersion, err := toolset.NewToolVersion(filepath.Join(manager.PathMeta.HomePath, "current"))
+ 	if err != nil {
+ 		return err
+ 	}
+diff --git a/cmd/commands/install.go b/cmd/commands/install.go
+index d12550a..e93d204 100644
+--- a/cmd/commands/install.go
++++ b/cmd/commands/install.go
+@@ -71,7 +71,7 @@ func installCmd(ctx *cli.Context) error {
+ 			var version internal.Version
+ 			if argsLen == 2 {
+ 				name = strings.ToLower(argArr[0])
+-				version = internal.Version(argArr[1])
++				version = internal.Version(argArr[1][1:])
+ 			} else {
+ 				name = strings.ToLower(argArr[0])
+ 				version = ""
+diff --git a/cmd/commands/uninstall.go b/cmd/commands/uninstall.go
+index 52734d3..67b4fe1 100644
+--- a/cmd/commands/uninstall.go
++++ b/cmd/commands/uninstall.go
+@@ -48,7 +48,7 @@ func uninstallCmd(ctx *cli.Context) error {
+ 	}
+ 
+ 	name := strings.ToLower(argArr[0])
+-	version := internal.Version(argArr[1])
++	version := internal.Version(argArr[1][1:])
+ 
+ 	source, err := manager.LookupSdk(name)
+ 	if err != nil {
+diff --git a/cmd/commands/use.go b/cmd/commands/use.go
+index e4a9d13..0225326 100644
+--- a/cmd/commands/use.go
++++ b/cmd/commands/use.go
+@@ -67,7 +67,7 @@ func useCmd(ctx *cli.Context) error {
+ 		version = ""
+ 	} else {
+ 		name = argArr[0]
+-		version = internal.Version(argArr[1])
++		version = internal.Version(argArr[1][1:])
+ 	}
+ 
+ 	scope := internal.Session
+diff --git a/internal/path.go b/internal/path.go
+index a330ffd..2dc404d 100644
+--- a/internal/path.go
++++ b/internal/path.go
+@@ -21,7 +21,6 @@ import (
+ 	"os"
+ 	"path/filepath"
+ 
+-	"github.com/version-fox/vfox/internal/env"
+ 	"github.com/version-fox/vfox/internal/util"
+ )
+ 
+@@ -49,7 +48,9 @@ func newPathMeta() (*PathMeta, error) {
+ 	pluginPath := filepath.Join(userHomeDir, ".version-fox", "plugin")
+ 	homePath := filepath.Join(userHomeDir, ".version-fox")
+ 	sdkCachePath := filepath.Join(userHomeDir, ".version-fox", "cache")
+-	tmpPath := filepath.Join(userHomeDir, ".version-fox", "temp")
++	// tmpPath := filepath.Join(userHomeDir, ".version-fox", "temp")
++	tmpPath := filepath.Join(userHomeDir, ".version-fox", "current")
++
+ 	_ = os.MkdirAll(sdkCachePath, 0755)
+ 	_ = os.MkdirAll(pluginPath, 0755)
+ 	_ = os.MkdirAll(tmpPath, 0755)
+@@ -59,10 +60,12 @@ func newPathMeta() (*PathMeta, error) {
+ 	}
+ 	curTmpPath := os.Getenv(HookCurTmpPath)
+ 	if curTmpPath == "" {
+-		pid := env.GetPid()
+-		timestamp := util.GetBeginOfToday()
+-		name := fmt.Sprintf("%d-%d", timestamp, pid)
+-		curTmpPath = filepath.Join(tmpPath, name)
++		// pid := env.GetPid()
++		// timestamp := util.GetBeginOfToday()
++		// name := fmt.Sprintf("%d-%d", timestamp, pid)
++		// curTmpPath = filepath.Join(tmpPath, name)
++		curTmpPath = tmpPath
++		os.Setenv(HookCurTmpPath, curTmpPath)
+ 	}
+ 	if !util.FileExists(curTmpPath) {
+ 		err = os.Mkdir(curTmpPath, 0755)
+diff --git a/internal/sdk.go b/internal/sdk.go
+index 6d32c08..2002e80 100644
+--- a/internal/sdk.go
++++ b/internal/sdk.go
+@@ -73,7 +73,7 @@ type Sdk struct {
+ }
+ 
+ func (b *Sdk) Install(version Version) error {
+-	label := b.label(version)
++	label := b.label("v"+version)
+ 	if b.CheckExists(version) {
+ 		return fmt.Errorf("%s is already installed", label)
+ 	}
+@@ -88,7 +88,7 @@ func (b *Sdk) Install(version Version) error {
+ 
+ 	// A second check is required because the plug-in may change the version number,
+ 	// for example, latest is resolved to a specific version number.
+-	label = b.label(mainSdk.Version)
++	label = b.label("v"+mainSdk.Version)
+ 	if b.CheckExists(mainSdk.Version) {
+ 		return fmt.Errorf("%s is already installed", label)
+ 	}
+@@ -480,7 +480,7 @@ func (b *Sdk) useInHook(version Version, scope UseScope) error {
+ 		return err
+ 	}
+ 
+-	pterm.Printf("Now using %s.\n", pterm.LightGreen(b.label(version)))
++	pterm.Printf("Now using %s.\n", pterm.LightGreen(b.label("v"+version)))
+ 	if !env.IsHookEnv() {
+ 		return shell.GetProcess().Open(os.Getppid())
+ 	}
